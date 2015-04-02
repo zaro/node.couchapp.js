@@ -11,17 +11,17 @@ var path = require('path')
 var h = function () {
   return JSON.parse(JSON.stringify({'content-type':'application/json', 'accept-type':'application/json'}));
 }
-  
+
 /**
  * Recursively load directory contents into ddoc
  *
  * It's really convenient to see the main couchapp code in single file,
  * rather than mapped into little files in lots of directories like
- * the python couchapp. But there are definitely cases where we might want 
+ * the python couchapp. But there are definitely cases where we might want
  * to use some module or another on the server side. This addition
- * loads file contents from a given directory (recursively) into a js 
- * object that can be added to a design document and require()'d in 
- * lists, shows, etc. 
+ * loads file contents from a given directory (recursively) into a js
+ * object that can be added to a design document and require()'d in
+ * lists, shows, etc.
  *
  * Use couchapp.loadFiles() in app.js like this:
  *
@@ -33,11 +33,11 @@ var h = function () {
  *      , vendor: couchapp.loadFiles('./vendor')
  *    }
  *
- * Optionally, pass in operators to process file contents. For example, 
+ * Optionally, pass in operators to process file contents. For example,
  * generate mustache templates from jade templates.
  *
  * In yourapp/templates/index.jade
- *  
+ *
  * !!!5
  * html
  *   head
@@ -62,7 +62,7 @@ var h = function () {
  *   };
  *
  * ddoc = { ... };
- * 
+ *
  * ddoc.templates = loadFiles(dir, options);
  */
 
@@ -76,7 +76,7 @@ function loadFiles(dir, options) {
       , prop = listing.split('.')[0] // probably want regexp or something more robust
       , stat = fs.statSync(file);
 
-      if (stat.isFile()) { 
+      if (stat.isFile()) {
         var content = fs.readFileSync(file).toString();
         if (options.operators) {
           options.operators.forEach(function (op) {
@@ -113,12 +113,12 @@ function copy (obj) {
   return n
 }
 
-  
+
 function createApp (doc, url, cb) {
   var app = {doc:doc}
-  
+
   app.fds = {};
-  
+
   app.prepare = function () {
     var p = function (x) {
       for (i in x) {
@@ -138,7 +138,7 @@ function createApp (doc, url, cb) {
     app.doc.attachments_md5 = app.doc.attachments_md5 || {}
     app.doc._attachments = app.doc._attachments || {}
   }
-  
+
   var push = function (callback) {
     console.log('Serializing.')
     var doc = copy(app.doc);
@@ -160,12 +160,12 @@ function createApp (doc, url, cb) {
       })
     })
   }
-  
+
   app.push = function (callback) {
     var revpos
       , pending_dirs = 0
       ;
-    
+
     console.log('Preparing.')
     var doc = app.current;
     for (i in app.doc) {
@@ -174,7 +174,7 @@ function createApp (doc, url, cb) {
     app.doc = doc;
     app.prepare();
     revpos = app.doc._rev ? parseInt(app.doc._rev.slice(0,app.doc._rev.indexOf('-'))) : 0;
-    
+
     var coffeeCompile;
     var coffeeExt;
     try{
@@ -229,18 +229,18 @@ function createApp (doc, url, cb) {
       })
     })
     if (!app.doc.__attachments || app.doc.__attachments.length == 0) push(callback);
-  }  
-  
+  }
+
   app.sync = function (callback) {
     // A few notes.
-    //   File change events are stored in an array and bundled up in to one write call., 
+    //   File change events are stored in an array and bundled up in to one write call.,
     // this reduces the amount of unnecessary processing as we get a lof of change events.
     //   The file descriptors are stored and re-used because it cuts down on the number of bad change events.
     //   And finally, we check the md5 and only push when the document is actually been changed.
     //   A lot of crazy workarounds for the fact that we basically get an event every time someone
     // looks funny at the underlying files and even reading and opening fds to check on the file trigger
     // more events.
-    
+
     app.push(function () {
       var changes = [];
       console.log('Watching files for changes...')
@@ -274,7 +274,7 @@ function createApp (doc, url, cb) {
               console.log("Removed "+change[1]);
             } else {
               pending += 1
-              
+
               fs.readFile(change[0], function (err, data) {
                 var f = change[1]
                   , d = data.toString('base64')
@@ -293,10 +293,10 @@ function createApp (doc, url, cb) {
                 }
                 if (pending == 0 && dirty) push(function () {dirty = false; setTimeout(check, 50)})
                 else if (pending == 0 && !dirty) setTimeout(check, 50)
-                
+
               })
             }
-            
+
           })
           changes = []
           if (pending == 0 && dirty) push(function () {dirty = false; setTimeout(check, 50)})
@@ -308,8 +308,140 @@ function createApp (doc, url, cb) {
       setTimeout(check, 50)
     })
   }
+
+  // Start a development web server on app
+  app.serve = function (options) {
+    var url = require('url');
+    var port = options.port || 3000,
+        staticDir = options.staticDir || 'attachments',
+        tmpDir = '/tmp/couchapp-compile-' + process.pid,
+        logDbRewrites = options.logDbRewrites != null ? options.logDbRewrites : false,
+        dbUrlObj = url.parse(options.couchUrl);
+
+    var proxyPaths = {}
+    var dbPrefix = '../../';
+    for (var i in this.doc.rewrites){
+      var rw = this.doc.rewrites[i];
+      // Rewrites starting with '../../' are proxied to the database
+      if (rw.to.indexOf(dbPrefix) == 0){
+        var proxyPath = rw.from;
+        if(proxyPath[proxyPath.length -1] == '*') {
+          proxyPath = proxyPath.substring(0,proxyPath.length-1)
+        }
+        var dbPath = rw.to.substring(dbPrefix.length);
+        if(dbPath[dbPath.length - 1] == '*'){
+          dbPath = dbPath.substring(0,dbPath.length-1)
+        }
+        if(dbPath.indexOf('*') >=0 ){
+          if(logDbRewrites){
+            console.log("Don't know how to proxy '" + rw.from + "' to CouchDB at " + rw.from );
+          }
+        } else {
+          proxyPaths[proxyPath] =
+            dbUrlObj.protocol + '//' + dbUrlObj.host +
+            path.normalize(dbUrlObj.pathname + dbPath);
+            if(logDbRewrites){
+              console.log("Proxying rewrite '" + proxyPath + "' to CouchDB at " + proxyPaths[proxyPath] );
+            }
+        }
+      }
+    }
+
+    var connect = require('connect');
+    var httpProxy = require('http-proxy'),
+        connect   = require('connect'),
+        logger = require('morgan'),
+        serveStatic = require('serve-static'),
+        errorHandler = require('errorhandler'),
+        connectCompiler;
+    try{
+        connectCompiler = require('connect-compiler');
+    } catch(e) {}
+
+
+    var proxy = httpProxy.createProxyServer({
+      target: {
+        host: dbUrlObj.host,
+        hostname: dbUrlObj.hostname,
+        port: dbUrlObj.port,
+        https: dbUrlObj.protocol == 'https:',
+      }
+    });
+    var app = connect()
+      .use(logger('dev'))
+      .use(serveStatic(staticDir));
+    if(connectCompiler){
+      console.log('Will compile assets with connect-assets.');
+      var ignore = [];
+      var quote = function(str) {
+        return (str+'').replace(/([.?*+^$[\]\\(){}|-])/g, "\\$1");
+      }
+      for(var prefix in proxyPaths){
+        ignore.push(quote(prefix));
+      }
+      if(ignore.length){
+        //console.log("Asset compile ignore paths:", '^(' +  ignore.join('|') + ')');
+        ignore  = new RegExp('^(' +  ignore.join('|') + ')');
+      } else {
+        ignore = null;
+      }
+      app.use(connectCompiler({
+        enabled: ['coffee'] ,
+        src: staticDir,
+        dest: tmpDir,
+        ignore :  ignore,
+      }))
+      .use(serveStatic(tmpDir));
+    }
+    app.use(function(req, res, next) {
+        for(var prefix in proxyPaths){
+          var dbPath = proxyPaths[prefix];
+          if (req.url.indexOf(prefix) === 0) {
+            var dbURL = req.url.replace(prefix,dbPath);
+            if(logDbRewrites){
+              console.log("*** ", req.url , ' -> ', dbURL);
+            }
+            req.url = dbURL;
+            req.headers['host'] = dbUrlObj.host;
+            proxy.proxyRequest(req, res);
+            return;
+          }
+        }
+        var body = '404 Not found.\nNo static file or db route matched.';
+        res.statusCode = 404;
+        res.setHeader('Content-Length', body.length);
+        res.end(body);
+       })
+      .use(errorHandler())
+      .listen(port);
+    console.log("Serving couchapp at: http://0.0.0.0:" + port +"/");
+
+    //Cleanup the temp directory on exit
+    var cleanup = function(){
+      var rmDir = function(dirPath) {
+        try { var files = fs.readdirSync(dirPath); }
+        catch(e) { return; }
+        if (files.length > 0)
+          for (var i = 0; i < files.length; i++) {
+            var filePath = dirPath + '/' + files[i];
+            if (fs.statSync(filePath).isFile())
+              fs.unlinkSync(filePath);
+            else
+              rmDir(filePath);
+          }
+        fs.rmdirSync(dirPath);
+      };
+      rmDir(tmpDir);
+    };
+    process.on('exit',cleanup);
+    process.on('SIGINT',function(){
+      cleanup()
+      process.exit();
+    });
+  }
+
   var _id = doc.app ? doc.app._id : doc._id
-  
+
   if (url.slice(url.length - _id.length) !== _id) url += '/' + _id;
 
   request({uri:url, headers:h()}, function (err, resp, body) {
